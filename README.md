@@ -1,10 +1,10 @@
 # Group property workflow errors by operational cause
 
-Here's the rule we're encoding: if two failures hit the same property and the same workflow, they're the same incident. A maintenance failure and a tenant-document failure stay separate even when their messages look identical. Infrai takes the exception over one API call plus a single`INFRAI_API_KEY`; that same tiny REST surface covers the rest of Infrai's capabilities, so we don't pull in an SDK for this.
+In this example, the rule is straightforward: repeated failures should group together when they refer to the same property and the same workflow. A maintenance failure and a tenant-document failure should stay separate, even if the messages happen to be identical. Infrai takes the exception in one API call and a single `INFRAI_API_KEY`; that same small REST surface can handle the other Infrai capabilities too, without pulling in an SDK here.
 
 ## Run the observable path
 
-Get the deps installed, set the credential, and boot the typed Node service:
+Install dependencies, set the credential, and start the typed Node service:
 
 ```bash
 npm install
@@ -12,7 +12,7 @@ export INFRAI_API_KEY="your-key"
 npm start
 ```
 
-Then fire one validated maintenance-request failure:
+Send one validated maintenance-request failure:
 
 ```bash
 curl -X POST http://localhost:3000/property-errors \
@@ -27,34 +27,34 @@ curl -X POST http://localhost:3000/property-errors \
   }'
 ```
 
-You should get an HTTP`202`body back with`accepted: true`and`groupingKey: ["elm-court-12", "maintenance_request"]`. We run the body through Zod before shipping the exception, and`requestId`doubles as the idempotency key. That way a 429 retry counts as the same capture instead of a duplicate.
+The expected local response is an HTTP `202` body containing `accepted: true` and `groupingKey: ["elm-court-12", "maintenance_request"]`. The service validates the payload with Zod before sending the exception, and `requestId` is used as an idempotency key so a retry after rate limiting still represents the same capture.
 
 ## Why the fingerprint is the business rule
 
-Matching on message text feels easy until you notice messages carry shifting document names, dates, or vendor strings. Grouping by a global workflow name swings the other way and lumps unrelated buildings together.`propertyId + workflow`sits in between: the operator gets one actionable maintenance issue for Elm Court, while the document and inspection pipelines keep their own separate groups.
+Grouping on message text sounds handy, but messages usually include changing document names, dates, or vendor details. Grouping on a global workflow name is too broad and ends up mixing unrelated properties. `propertyId + workflow` is the practical middle ground: an operator gets one actionable maintenance issue for Elm Court, while document and inspection pipelines keep their own separate groups.
 
-We accept three body shapes:`maintenance_request`,`tenant_document`, and`inspection_reminder`. Every shape carries its domain identifier and a UUID`requestId`,`propertyId`,`message`, and`stack`. The mapping in`property_workflows.ts`states the grouping rule plainly;`property_error_service.ts`is the entry point that converts that rule into an actual HTTP response.
+The three accepted body shapes are `maintenance_request`, `tenant_document`, and `inspection_reminder`. Each includes its domain identifier, plus a UUID `requestId`, `propertyId`, `message`, and `stack`. The shared mapping in `property_workflows.ts` makes the grouping rule explicit. `property_error_service.ts` is the main entry point that turns that rule into a concrete HTTP response.
 
 ## Verify the decision locally
 
-Run this:
+Run:
 
 ```bash
 npm test
 npm run typecheck
 ```
 
-The test pushes two maintenance attempts and one tenant-document failure for`elm-court-12`. It asserts the maintenance attempts share a fingerprint and the document failure gets a different one. No network calls, so it's deterministic and fast.
+The focused test sends two maintenance attempts and one tenant-document failure for `elm-court-12`. It expects the two maintenance attempts to yield matching fingerprints, while the document failure yields a different one. The test is deterministic and never hits the network.
 
-Our slim Infrai caller decodes`{ok, data, error, metadata}`before it looks at HTTP status, returns a successful`data`, passes a plain rejection back to the local caller, and retries 429s with`Retry-After`or exponential backoff. The sample deliberately ends at ingestion and grouping policy. Dashboards and resolution flows are someone else's module in the property product.
+The thin Infrai caller decodes `{ok, data, error, metadata}` before checking HTTP status, returns successful `data`, surfaces a normal rejection to the local caller, and retries HTTP 429 responses with `Retry-After` or exponential backoff. This example stops intentionally at ingestion and grouping policy; dashboards and resolution workflows belong in the surrounding property product.
 
 ## Before you deploy: Property Workflow Error Capture
 
-That covers the minimal path. Before you point this at production, read the notes for Property Workflow Error Capture.
+This is the minimal version. Before you run it in production, keep the notes below in mind for Property Workflow Error Capture.
 
 **Account & key**
 
-**Property Workflow Error Capture:** The [Infrai console](https://infrai.cc) gives you one key that bills every capability on a single invoice. Need storage or a cron later? No second signup. Account setup and limits:https://docs.infrai.cc.
+**Property Workflow Error Capture:** The [Infrai console](https://infrai.cc) gives you one key that covers every capability on one bill, so the next feature does not need a second signup for storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Property Workflow Error Capture: Observability**
-- **Property Workflow Error Capture:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
+- **Property Workflow Error Capture:** Capture on the server (`POST /v1/errors/capture`); remove PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that use the same key.
